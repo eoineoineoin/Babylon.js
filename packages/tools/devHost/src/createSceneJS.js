@@ -3,33 +3,32 @@ import { canvas, engine } from "./index";
 import * as BABYLON from "@dev/core";
 import "@dev/loaders";
 
-export function createScene() {
-    // This creates a basic Babylon Scene object (non-mesh)
+var createScene = function () {
     var scene = new BABYLON.Scene(engine);
+var gravityVector = new BABYLON.Vector3(0, -9.81, 0);
+var physicsPlugin = new BABYLON.HavokPlugin();
+scene.enablePhysics(gravityVector, physicsPlugin);
 
-    // This creates and positions a free camera (non-mesh)
-    var camera = new BABYLON.FreeCamera("camera1", new BABYLON.Vector3(0, 5, -10), scene);
+    //Adding a light
+    var light = new BABYLON.PointLight("Omni", new BABYLON.Vector3(20, 20, 100), scene);
 
-    // This targets the camera to scene origin
-    camera.setTarget(BABYLON.Vector3.Zero());
+    //Adding an Arc Rotate Camera
+    var camera = new BABYLON.ArcRotateCamera("Camera", 0, 0.8, 100, BABYLON.Vector3.Zero(), scene);
+    camera.attachControl(canvas, false);
 
-    // This attaches the camera to the canvas
-    camera.attachControl(canvas, true);
+console.log(BABYLON.GLTF2.GLTFLoader.RegisterExtension);
 
-    // This creates a light, aiming 0,1,0 - to the sky (non-mesh)
-    var light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+    // The first parameter can be used to specify which mesh to import. Here we import all meshes
+    BABYLON.SceneLoader.ImportMesh("", "https://eoinrul.es/tmp/", "Lantern.glb", scene, function (newMeshes) {
+        // Set the target of the camera to the first imported mesh
+        //camera.target = newMeshes[0];
+        console.log(newMeshes);
+    });
 
-    // Default intensity is 1. Let's dim the light a small amount
-    light.intensity = 0.7;
-
-    // Our built-in 'sphere' shape.
-    var sphere = BABYLON.MeshBuilder.CreateSphere("sphere", { diameter: 2, segments: 32 }, scene);
-
-    // Move the sphere upward 1/2 its height
-    sphere.position.y = 1;
-
-    // Our built-in 'ground' shape.
-    BABYLON.MeshBuilder.CreateGround("ground", { width: 6, height: 6 }, scene);
+    // Move the light with the camera
+    scene.registerBeforeRender(function () {
+        light.position = camera.position;
+    });
 
     return scene;
 }
