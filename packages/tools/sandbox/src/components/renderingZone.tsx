@@ -22,6 +22,8 @@ import { PBRBaseMaterial } from "core/Materials/PBR/pbrBaseMaterial";
 import { Texture } from "core/Materials/Textures/texture";
 import { PBRMaterial } from "core/Materials/PBR/pbrMaterial";
 
+declare const HavokPhysics: any;
+
 function isTextureAsset(name: string): boolean {
     const queryStringIndex = name.indexOf("?");
     if (queryStringIndex !== -1) {
@@ -72,6 +74,8 @@ export class RenderingZone extends React.Component<IRenderingZoneProps> {
                 forceSRGBBufferSupportState: this.props.globalState.commerceMode,
             });
         }
+
+        (globalThis as any).HK = await HavokPhysics();
 
         this._engine.loadingUIBackgroundColor = "#2A2342";
 
