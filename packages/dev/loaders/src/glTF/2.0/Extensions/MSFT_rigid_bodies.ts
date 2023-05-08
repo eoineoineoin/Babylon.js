@@ -1,13 +1,17 @@
-import { Vector3, Quaternion, Matrix, Nullable } from "@babylonjs/core";
-import { PhysicsBody, PhysicsMotionType, PhysicsShapeContainer } from "@babylonjs/core";
-import { AbstractMesh, TransformNode } from "@babylonjs/core";
-import { GLTF2, IGLTFLoaderExtension } from "@babylonjs/loaders";
-import { PhysicsMassProperties } from "@babylonjs/core";
-import { PhysicsShape, PhysicsShapeSphere, PhysicsShapeCapsule, PhysicsShapeCylinder } from "@babylonjs/core";
-import { PhysicsShapeBox, PhysicsShapeConvexHull, PhysicsShapeMesh } from "@babylonjs/core";
-import { Physics6DoFConstraint, Physics6DoFLimit, PhysicsConstraintAxis } from "@babylonjs/core";
-import { HavokPlugin } from "@babylonjs/core";
+import { TransformNode } from "core/Meshes/transformNode";
+import { GLTFLoader } from "../glTFLoader";
+import { IGLTFLoaderExtension } from "../glTFLoaderExtension";
+import { GLTF2 } from "loaders/glTF";
+import { PhysicsShape, PhysicsShapeBox, PhysicsShapeCapsule, PhysicsShapeContainer, PhysicsShapeConvexHull, PhysicsShapeCylinder, PhysicsShapeMesh, PhysicsShapeSphere } from "core/Physics/v2/physicsShape";
+import { AbstractMesh } from "core/Meshes/abstractMesh";
+import { Nullable } from "core/types";
+import { HavokPlugin } from "core/Physics/v2/Plugins/havokPlugin";
+import { Matrix, Quaternion, Vector3 } from "core/Maths/math.vector";
+import { PhysicsConstraintAxis, PhysicsMassProperties, PhysicsMotionType } from "core/Physics/v2/IPhysicsEnginePlugin";
+import { PhysicsBody } from "core/Physics/v2/physicsBody";
+import { Physics6DoFConstraint, Physics6DoFLimit } from "core/Physics/v2/physicsConstraint";
 
+import "core/Physics/physicsEngineComponent";
 
 namespace MSFT_CollisionPrimitives
 {
@@ -224,7 +228,7 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
             var meshData = this.loader.gltf.meshes![colliderData.convex.mesh];
             //<todo.eoin I just want to access the mesh object here; not create one in the scene
             //@ts-ignore _loadMeshAsync is private:
-            var convexMesh = await this.loader._loadMeshAsync(context.concat("/collider"), gltfNode, meshData, assign)
+            var convexMesh = await this.loader._loadMeshAsync(context.concat("/collider"), gltfNode, meshData, assign) as Mesh;
             convexMesh.isVisible = false;
             convexMesh.name = convexMesh.name + "_Collider";
             convexMesh.parent = sceneNode;
@@ -241,7 +245,7 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
         {
             var meshData = this.loader.gltf.meshes![colliderData.trimesh.mesh];
             //@ts-ignore _loadMeshAsync is private:
-            var meshShape = await this.loader._loadMeshAsync(context.concat("/collider"), gltfNode, meshData, assign)
+            var meshShape = await this.loader._loadMeshAsync(context.concat("/collider"), gltfNode, meshData, assign) as Mesh;
             meshShape.isVisible = false;
             meshShape.name = meshShape.name + "_Collider";
             meshShape.setParent(sceneNode);
@@ -413,10 +417,6 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
     }
 
     public onReady() {
-        if (true) {
-            return;
-        }
-
         if (this._physicsVersion != 2) {
             return;
         }
@@ -442,7 +442,7 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
             }
 
             let containerShape = <PhysicsShapeContainer>rigidBodyNode.physicsBody!.shape;
-            containerShape.addChild(shape, node);
+            containerShape.addChildFromParent(rigidBodyNode, shape, node);
 
         });
         // Now, let's make the joints //<todo.eoin Probably should be in loadSceneAsync?
@@ -538,7 +538,6 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
     }
 }
 
-import { GLTFLoader } from "../glTFLoader";
 GLTFLoader.RegisterExtension(
     //@ts-ignore
    "MSFT_rigid_bodies", function (loader) { return new MSFT_RigidBodies_Plugin(loader); } );
