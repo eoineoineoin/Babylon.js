@@ -7,7 +7,8 @@ import { AbstractMesh } from "core/Meshes/abstractMesh";
 import { Nullable } from "core/types";
 import { HavokPlugin } from "core/Physics/v2/Plugins/havokPlugin";
 import { Matrix, Quaternion, Vector3 } from "core/Maths/math.vector";
-import { PhysicsConstraintAxis, PhysicsMassProperties, PhysicsMotionType } from "core/Physics/v2/IPhysicsEnginePlugin";
+import { PhysicsShapeType, PhysicsConstraintAxis, PhysicsMassProperties, PhysicsMotionType } from "core/Physics/v2/IPhysicsEnginePlugin";
+import { PhysicsMaterialCombineMode } from "core/Physics/v2/physicsMaterial";
 import { PhysicsBody } from "core/Physics/v2/physicsBody";
 import { Physics6DoFConstraint, Physics6DoFLimit } from "core/Physics/v2/physicsConstraint";
 
@@ -169,7 +170,7 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
     private loader : GLTF2.GLTFLoader;
     private _deferredJoints : Array<DeferredJoint> = []
     private _deferredBodies : Array<() => void> = [];
-    private _deferredColliders : Map<TransformNode, PhysicsShape> = new Map();
+    private _deferredColliders : Array<() => Promise<void>> = [];
     private _physicsVersion : number;
     private _layerNames: string[] = [];
 
@@ -194,7 +195,9 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
 
     protected async _constructCollider(
         context: string, sceneNode: AbstractMesh, gltfNode: GLTF2.INode,
-        colliderData: MSFT_CollisionPrimitives.Collider, assign: ((babylonMesh: TransformNode) => void)) {
+        colliderData: MSFT_CollisionPrimitives.Collider,
+        rbExt : MSFT_RigidBodies.SceneExt, assign: ((babylonMesh: TransformNode) => void)) : Promise<Nullable<PhysicsShape>> {
+
         let scene = this.loader.babylonScene;
         let physicsShape: Nullable<PhysicsShape> = null;
         if (colliderData.sphere != undefined)
@@ -254,13 +257,13 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
             meshShape.scaling = Vector3.One();
 
             physicsShape = new PhysicsShapeMesh(meshShape, scene);
+            physicsShape = new PhysicsShape({ type: PhysicsShapeType.MESH, parameters: { mesh: meshShape, includeChildMeshes: true }}, scene);
         }
 
         if (physicsShape == undefined) {
-            return;
+            return null;
         }
 
-        //<todo.eoin Need to add collision filter info
         // Add collision filter info
         {
             let filterMembership = 0;
@@ -284,35 +287,41 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
             }
         }
 
-
         if (!gltfNode.extensions) {
-            return;
+            return physicsShape;
         }
 
         var extData = gltfNode.extensions.MSFT_rigid_bodies as MSFT_RigidBodies.NodeExt;
         if (extData.physicsMaterial != null) {
-            var rbExt : MSFT_RigidBodies.SceneExt = this.loader.gltf.extensions!.MSFT_rigid_bodies;
             var mat : MSFT_RigidBodies.PhysicsMaterial = rbExt!.physicsMaterials![extData.physicsMaterial];
-
-            var dynamicFriction = 0.5;
-            if (mat.dynamicFriction != null) {
-                dynamicFriction = mat.dynamicFriction;
-            }
-
-            var restitution = 0.0;
-            if (mat.restitution != null) {
-                restitution = mat.restitution;
-            }
 
             //<todo.eoin Add rest of material props
             physicsShape.material = {
-                friction: dynamicFriction,
-                staticFriction: dynamicFriction,
-                restitution: restitution
+                friction: mat.dynamicFriction?? 0.5,
+                staticFriction: mat.staticFriction?? 0.5,
+                restitution: mat.restitution?? 0.0,
+                frictionCombine: this._materialCombineModeToNative(mat.frictionCombineMode)?? PhysicsMaterialCombineMode.MAXIMUM,
+                restitutionCombine: this._materialCombineModeToNative(mat.frictionCombineMode) ?? PhysicsMaterialCombineMode.MINIMUM
             };
         }
-        //<tood.eoin Make no-materials triggers!
-        this._deferredColliders.set(sceneNode, physicsShape);
+
+        //<todo.eoin Make no-materials triggers!
+        return physicsShape;
+    }
+
+    private _materialCombineModeToNative(combine: string | undefined): PhysicsMaterialCombineMode | undefined {
+        if (!combine) {
+            return undefined;
+        } else if (combine == "AVERAGE") {
+            return PhysicsMaterialCombineMode.ARITHMETIC_MEAN;
+        } else if (combine == "MINIMUM") {
+            return PhysicsMaterialCombineMode.MINIMUM;
+        } else if (combine == "MAXIMUM") {
+            return PhysicsMaterialCombineMode.MAXIMUM;
+        } else if (combine == "MULTIPLY") {
+            return PhysicsMaterialCombineMode.MULTIPLY;
+        }
+        return undefined;
     }
 
     private _layerNamesToMask(names: Array<string>): number {
@@ -338,9 +347,49 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
         //<todo.eoin Don't think Babylon supports triggers?
         if (extData.collider != null && extData.physicsMaterial != null)
         {
-            var ext : MSFT_CollisionPrimitives.SceneExt = this.loader.gltf.extensions!.MSFT_collision_primitives;
-            var collider : MSFT_CollisionPrimitives.Collider = ext.colliders[extData.collider];
-            await this._constructCollider(context, sceneNode, gltfNode, collider, assign);
+            let ext : MSFT_CollisionPrimitives.SceneExt = this.loader.gltf.extensions!.MSFT_collision_primitives;
+            var rbExt : MSFT_RigidBodies.SceneExt = this.loader.gltf.extensions!.MSFT_rigid_bodies;
+            let collider : MSFT_CollisionPrimitives.Collider = ext.colliders[extData.collider];
+            this._deferredColliders.push(async () => {
+                let physicsShape = await this._constructCollider(context, sceneNode, gltfNode, collider, rbExt, assign);
+
+                if (physicsShape == null) {
+                    return;
+                }
+
+                let rigidBodyNode = this._getParentRigidBody(sceneNode);
+                if (rigidBodyNode == null) {
+                    // This is a static collider. Just make a new body
+                    //<todo.eoin Maybe could just put a body on the root?
+                    // Remove the parent to get rid of the transform added by the glTF loader (same as dynamic bodies)
+                    sceneNode.setParent(null);
+                    sceneNode.physicsBody = new PhysicsBody(sceneNode, PhysicsMotionType.STATIC, false, sceneNode.getScene());
+                    rigidBodyNode = sceneNode;
+                }
+
+                // Now, add the shape to the body:
+                if (!rigidBodyNode.physicsBody!.shape) {
+                    rigidBodyNode.physicsBody!.shape = new PhysicsShapeContainer(sceneNode.getScene());
+                    //<todo.eoin Optimize the case of a single collider with identity transform
+                }
+
+                let containerShape = <PhysicsShapeContainer>rigidBodyNode.physicsBody!.shape;
+
+                //<todo.eoin Would like to just use the addChildFromParent() interface here, but the root
+                //< of a glTF file gets an additional (1,-1,1) scale, which the physics simulation doesn't
+                //< account for (should probably bake it into the generated shapes) but for now, just manually
+                //< calculate a childToParent transform which adds that scaling back in:
+                const childToWorld = sceneNode.computeWorldMatrix(true);
+                const parentToWorld = rigidBodyNode.computeWorldMatrix(true);
+                let parentScaling = new Vector3();
+                parentToWorld.decompose(parentScaling);
+                const childToParent = childToWorld.multiply(Matrix.Invert(parentToWorld)).multiply(Matrix.Scaling(parentScaling.x, parentScaling.y, parentScaling.z));
+                const translation = new Vector3();
+                const rotation = new Quaternion();
+                const scale = new Vector3();
+                childToParent.decompose(scale, rotation, translation);
+                containerShape.addChild(physicsShape, translation, rotation, scale);
+            });
         }
 
         if (extData.rigidBody != null) {
@@ -349,6 +398,7 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
                 if (!extData.rigidBody)
                     return;
 
+                sceneNode.setParent(null);
                 const motionType = extData.rigidBody.isKinematic ? PhysicsMotionType.ANIMATED : PhysicsMotionType.DYNAMIC;
                 sceneNode.physicsBody = new PhysicsBody(sceneNode, motionType, false, this.loader.babylonScene);
 
@@ -416,7 +466,7 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
         return this.loader.loadSceneAsync(context, scene);
     }
 
-    public onReady() {
+    public async onReady() {
         if (this._physicsVersion != 2) {
             return;
         }
@@ -424,28 +474,9 @@ export class MSFT_RigidBodies_Plugin implements IGLTFLoaderExtension  {
         for (let f of this._deferredBodies)
             f();
 
-        this._deferredColliders.forEach((shape, node) => {
-            let rigidBodyNode = this._getParentRigidBody(node);
-            if (rigidBodyNode == null) {
-                // This is a static collider. Just make a new body
-                //<todo.eoin Maybe could just put a body on the root?
-                // Remove the parent to get rid of the transform added by the glTF loader (same as dynamic bodies)
-                node.setParent(null);
-                node.physicsBody = new PhysicsBody(node, PhysicsMotionType.STATIC, false, this.loader.babylonScene);
-                rigidBodyNode = node;
-            }
+        for (let f of this._deferredColliders)
+            await f();
 
-            // Now, add the shape to the body:
-            if (!rigidBodyNode.physicsBody!.shape) {
-                rigidBodyNode.physicsBody!.shape = new PhysicsShapeContainer(node.getScene());
-                //<todo.eoin Optimize the case of a single collider with identity transform
-            }
-
-            let containerShape = <PhysicsShapeContainer>rigidBodyNode.physicsBody!.shape;
-            containerShape.addChildFromParent(rigidBodyNode, shape, node);
-
-        });
-        // Now, let's make the joints //<todo.eoin Probably should be in loadSceneAsync?
         for(let joint of this._deferredJoints) {
             this.make6DoFJoint(joint);
         }
